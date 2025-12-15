@@ -4,7 +4,7 @@ import ControlPanel from './components/ControlPanel';
 import Oscilloscope from './components/Oscilloscope';
 import GatingPlot from './components/GatingPlot';
 import { solveHH, getInitialState } from './services/hhSolver';
-import { HHState, HHParameters, SimulationMode } from './types';
+import { HHState, HHParameters } from './types';
 
 // Constants
 const HISTORY_LENGTH = 300; // Number of points in graph
@@ -23,18 +23,11 @@ const BIOLOGICAL_PARAMS: HHParameters = {
   I_ext: 0.0,
 };
 
-const CYBERNETIC_PARAMS: HHParameters = {
-  ...BIOLOGICAL_PARAMS,
-  g_Na: 350.0, // Massive sodium influx
-  g_K: 80.0,   // Faster repolarization
-  I_ext: 5.0,  // Constant background hum
-};
-
-const App: React.FC = () => {
+export const App: React.FC = () => {
   // --- State ---
   const [params, setParams] = useState<HHParameters>(BIOLOGICAL_PARAMS);
-  const [mode, setMode] = useState<SimulationMode>(SimulationMode.BIOLOGICAL);
-  const [history, setHistory] = useState<HHState[]>([]);
+  // Renamed to simHistory to avoid shadowing global history object
+  const [simHistory, setSimHistory] = useState<HHState[]>([]);
   
   // Refs for simulation loop to avoid closure staleness
   const stateRef = useRef<HHState>(getInitialState());
@@ -55,29 +48,18 @@ const App: React.FC = () => {
     pulseRef.current = 20; // 20ms countdown
   }, []);
 
-  const handleModeToggle = useCallback(() => {
-    setMode(prev => {
-        const newMode = prev === SimulationMode.BIOLOGICAL ? SimulationMode.CYBERNETIC : SimulationMode.BIOLOGICAL;
-        const newParams = newMode === SimulationMode.CYBERNETIC ? CYBERNETIC_PARAMS : BIOLOGICAL_PARAMS;
-        setParams(newParams);
-        paramsRef.current = newParams;
-        return newMode;
-    });
-  }, []);
-
   const handleReset = useCallback(() => {
     // Reset simulation state variables
     stateRef.current = getInitialState();
     
-    // Reset parameters to current mode defaults
-    const defaultParams = mode === SimulationMode.CYBERNETIC ? CYBERNETIC_PARAMS : BIOLOGICAL_PARAMS;
-    setParams(defaultParams);
-    paramsRef.current = defaultParams;
+    // Reset parameters
+    setParams(BIOLOGICAL_PARAMS);
+    paramsRef.current = BIOLOGICAL_PARAMS;
     
     // Reset pulse and history
     pulseRef.current = 0;
-    setHistory([]);
-  }, [mode]);
+    setSimHistory([]);
+  }, []);
 
   // --- Simulation Loop ---
   useEffect(() => {
@@ -110,7 +92,7 @@ const App: React.FC = () => {
       }
 
       // Sync to React State periodically (every frame)
-      setHistory([...historyBuffer]);
+      setSimHistory([...historyBuffer]);
 
       animationFrameId = requestAnimationFrame(loop);
     };
@@ -125,6 +107,11 @@ const App: React.FC = () => {
       
       {/* Scanline Overlay */}
       <div className="scanlines"></div>
+      
+      {/* Vignette */}
+      <div className="absolute inset-0 z-[1] bg-vignette opacity-60 pointer-events-none"></div>
+      
+      {/* Noise */}
       <div className="absolute inset-0 z-[1] bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none mix-blend-overlay"></div>
 
       {/* BACKGROUND: 3D Visualization */}
@@ -136,13 +123,11 @@ const App: React.FC = () => {
       <div className="relative z-10 w-full h-full flex flex-col md:flex-row pointer-events-none">
         
         {/* LEFT: Controls (Pointer events enabled) */}
-        <div className="pointer-events-auto h-full hidden md:block shadow-2xl z-20">
+        <div className="pointer-events-auto h-full hidden md:block z-20">
             <ControlPanel 
                 params={params} 
                 onParamChange={handleParamChange} 
                 onInjectCurrent={handleInject}
-                mode={mode}
-                onModeToggle={handleModeToggle}
                 onReset={handleReset}
             />
         </div>
@@ -152,20 +137,44 @@ const App: React.FC = () => {
             {/* Header */}
             <header className="flex justify-between items-start pointer-events-auto select-none">
                 <div>
-                    <h1 className="text-5xl md:text-7xl font-display font-black text-transparent bg-clip-text bg-gradient-to-br from-cyber-neon via-white to-transparent tracking-tighter drop-shadow-[0_0_15px_rgba(0,243,255,0.4)]">
+                    <h1 className="text-5xl md:text-7xl font-display font-black text-transparent bg-clip-text bg-gradient-to-br from-cyber-neon via-white to-white tracking-tighter drop-shadow-[0_0_20px_rgba(0,243,255,0.3)]">
                         NEURAL<br/>DYNAMICS
                     </h1>
-                    <div className="flex items-center gap-3 mt-2">
-                        <div className={`w-2 h-2 rounded-full ${mode === SimulationMode.CYBERNETIC ? 'bg-cyber-plasma shadow-[0_0_8px_#bc13fe]' : 'bg-green-500 shadow-[0_0_8px_#00ff00]'}`}></div>
-                        <p className="text-cyber-neon/80 font-mono text-xs md:text-sm tracking-[0.3em] uppercase">
-                            BIOELECTRIC COMPUTATION // {mode}
+                    <div className="flex items-center gap-3 mt-3">
+                        <div className="text-emerald-500 drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]">
+                           {/* Neuron Icon (Soma, Dendrites, Axon) */}
+                           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="animate-pulse">
+                             {/* Cell Body */}
+                             <circle cx="12" cy="10" r="3" stroke="currentColor" strokeWidth="1.5" fill="currentColor" fillOpacity="0.2"/>
+                             <circle cx="12" cy="10" r="1" fill="currentColor"/>
+                             
+                             {/* Dendrites */}
+                             <path d="M12 7V3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                             <path d="M12 3L10 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                             <path d="M12 3L14 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+
+                             <path d="M14.5 8.5L18 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                             <path d="M18 6L20 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                             <path d="M18 6L19 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+
+                             <path d="M9.5 8.5L6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                             <path d="M6 6L4 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                             <path d="M6 6L5 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+
+                             {/* Axon */}
+                             <path d="M12 13C12 16 12 18 9 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                             <circle cx="9" cy="21" r="1" fill="currentColor"/>
+                           </svg>
+                        </div>
+                        <p className="text-cyber-neon/80 font-sans font-bold text-xs md:text-sm tracking-[0.3em] uppercase">
+                            Bioelectric Computation // Biological
                         </p>
                     </div>
                 </div>
                 
-                <div className="hidden md:block text-right bg-cyber-black/50 backdrop-blur-sm p-4 border-r-2 border-cyber-neon/50">
-                   <div className="text-cyber-neon font-mono text-3xl font-bold tracking-tight">{stateRef.current.V.toFixed(1)} <span className="text-sm opacity-50">mV</span></div>
-                   <div className="text-[10px] text-gray-400 font-display tracking-widest uppercase mt-1">Membrane Potential</div>
+                <div className="hidden md:block text-right bg-black/40 backdrop-blur-md p-5 border-r-2 border-cyber-neon/30 rounded-l-sm">
+                   <div className="text-cyber-neon font-mono text-4xl font-bold tracking-tight shadow-[0_0_15px_rgba(0,243,255,0.2)]">{stateRef.current.V.toFixed(1)} <span className="text-lg opacity-60">mV</span></div>
+                   <div className="text-[10px] text-gray-400 font-sans font-semibold tracking-widest uppercase mt-1">Membrane Potential</div>
                 </div>
             </header>
 
@@ -180,44 +189,31 @@ const App: React.FC = () => {
                   INITIATE ACTION POTENTIAL
                </button>
                
-               <div className="flex gap-2">
-                 <button 
-                    type="button"
-                    onClick={handleModeToggle}
-                    className={`flex-1 py-3 px-4 font-mono text-xs border transition-all duration-300 ${
-                       mode === SimulationMode.CYBERNETIC 
-                       ? 'bg-cyber-plasma/20 border-cyber-plasma text-white' 
-                       : 'bg-cyber-panel/80 border-gray-700 text-gray-400'
-                     }`}
-                 >
-                    {mode === SimulationMode.CYBERNETIC ? '⚡ OVERDRIVE' : '🌱 STANDARD'}
-                 </button>
-                 <button 
-                    type="button"
-                    onClick={handleReset}
-                    className="w-12 bg-cyber-panel/80 border border-gray-700 text-gray-400 flex items-center justify-center"
-                 >
-                    ↺
-                 </button>
-               </div>
+               <button 
+                  type="button"
+                  onClick={handleReset}
+                  className="w-full py-3 bg-cyber-panel/80 border border-gray-700 text-gray-400 flex items-center justify-center font-mono text-xs uppercase"
+               >
+                  System Reset
+               </button>
             </div>
         </div>
 
         {/* RIGHT: Oscilloscopes */}
-        <div className="w-full md:w-[500px] lg:w-[800px] h-[50vh] md:h-full flex flex-col pointer-events-auto bg-cyber-black/80 md:bg-cyber-black/40 backdrop-blur-xl border-l border-cyber-panel transition-all duration-300">
-            <div className="flex-[2] min-h-0 border-b border-cyber-panel p-4">
-                <Oscilloscope data={history} />
+        <div className="w-full md:w-[500px] lg:w-[800px] h-[50vh] md:h-full flex flex-col pointer-events-auto bg-black/60 md:bg-black/30 backdrop-blur-xl border-l border-white/5 transition-all duration-300">
+            <div className="flex-[2] min-h-0 border-b border-white/5 p-5">
+                <Oscilloscope data={simHistory} />
             </div>
-            <div className="flex-1 min-h-0 hidden md:block p-4">
-                <GatingPlot data={history} />
+            <div className="flex-1 min-h-0 hidden md:block p-5">
+                <GatingPlot data={simHistory} />
             </div>
-            <div className="p-4 border-t border-cyber-panel bg-cyber-dark/80">
+            <div className="p-4 border-t border-white/5 bg-black/80">
                 <div className="text-[10px] font-mono text-gray-500 mb-1 flex justify-between">
                     <span>SYS_UPTIME</span>
                     <span>{performance.now().toFixed(0)} MS</span>
                 </div>
-                <div className="h-1 w-full bg-gray-800 overflow-hidden">
-                    <div className="h-full bg-cyber-neon animate-pulse w-2/3"></div>
+                <div className="h-0.5 w-full bg-gray-800 overflow-hidden rounded-full">
+                    <div className="h-full bg-cyber-neon animate-pulse w-2/3 shadow-[0_0_5px_#00f3ff]"></div>
                 </div>
             </div>
         </div>
@@ -226,5 +222,3 @@ const App: React.FC = () => {
     </div>
   );
 };
-
-export default App;

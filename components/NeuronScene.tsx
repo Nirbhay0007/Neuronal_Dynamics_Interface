@@ -32,7 +32,8 @@ const NeuronScene: React.FC<NeuronSceneProps> = ({ state, simulationParams }) =>
 
     // --- Setup Scene ---
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x050505, 0.02);
+    // Reduce fog density to ensure distant branches are more visible
+    scene.fog = new THREE.FogExp2(0x050505, 0.015);
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(60, containerRef.current.clientWidth / containerRef.current.clientHeight, 0.1, 100);
@@ -86,8 +87,9 @@ const NeuronScene: React.FC<NeuronSceneProps> = ({ state, simulationParams }) =>
       uniforms: {
         time: { value: 0 },
         voltage: { value: -65 },
-        colorRest: { value: new THREE.Color(0x001133) }, // Dark Blue
-        colorActive: { value: new THREE.Color(0xbc13fe) }, // Purple/Magenta
+        // Updated colors to be much brighter/neon for visibility
+        colorRest: { value: new THREE.Color(0x0066ff) }, // Bright Electric Blue
+        colorActive: { value: new THREE.Color(0xff00ff) }, // Neon Magenta
         colorPeak: { value: new THREE.Color(0xffffff) }, // White
       },
       vertexShader: `
@@ -106,41 +108,54 @@ const NeuronScene: React.FC<NeuronSceneProps> = ({ state, simulationParams }) =>
         varying vec3 vPos;
         
         void main() {
-          // Normalize voltage: Hyperpolarization(-120) -> 0.0, Peak(+60) -> 1.0
-          // Range is 180mV to accommodate strong hyperpolarization undershoot
-          float normV = clamp((voltage + 120.0) / 180.0, 0.0, 1.0);
+          // Normalize voltage: -90mV to +50mV
+          float normV = smoothstep(-90.0, 50.0, voltage);
           
-          vec3 color;
-          
-          if (normV < 0.35) {
-             color = mix(colorRest * 0.3, colorRest, normV * 2.85); 
-          } else if (normV < 0.8) {
-             color = mix(colorRest, colorActive, (normV - 0.35) * 2.2);
-          } else {
-             color = mix(colorActive, colorPeak, (normV - 0.8) * 5.0);
-          }
+          // Color Interpolation
+          // Mix faster to active color to show change early
+          vec3 color = mix(colorRest, colorActive, smoothstep(0.1, 0.8, normV));
+          color = mix(color, colorPeak, smoothstep(0.8, 1.0, normV));
 
-          // Pulse wave effect
+          // 1. Heartbeat Pulse (Global)
+          // Always pulsing slightly (alive), gets frantic with voltage
+          float pulseSpeed = 2.0 + (normV * 15.0); 
+          float pulse = sin(time * pulseSpeed) * 0.5 + 0.5;
+          
+          // 2. Conduction Wave (Spatial)
+          // Travels outward
           float dist = length(vPos);
-          float wave = sin(dist * 2.0 - time * 5.0 * (0.5 + normV)); 
+          float flowSpeed = 3.0 + (normV * 12.0);
+          float wave = sin(dist * 2.0 - time * flowSpeed);
           
-          float intensity = 0.5 + wave * 0.5;
+          // Sharpen the wave to look like electric signals
+          float waveSharp = pow(max(0.0, wave), 3.0); 
           
-          // Enhanced Bloom Logic for High Voltage
-          if (normV > 0.83) { // Approx > +30mV
-             // Simulating "Bloom" by overdriving intensity and whitening
-             intensity = 4.0 + wave; 
-             color += vec3(0.3, 0.8, 1.0); // Add cyan-white tint
-          } else if (normV > 0.6) {
-             intensity += 1.5; // Glow harder on spike rise
+          // Intensity Calculation
+          // BOOSTED BASE INTENSITY so it's always visible
+          float baseIntensity = 1.5; 
+          
+          // Pulse modulates the base glow
+          float pulseEffect = pulse * 0.5;
+          
+          // Wave adds bright streaks
+          float waveEffect = waveSharp * (2.0 + normV * 5.0);
+          
+          float totalIntensity = baseIntensity + pulseEffect + waveEffect;
+          
+          // Massive Overdrive at Peak (Action Potential)
+          if (normV > 0.85) {
+             totalIntensity += 8.0 * (normV - 0.85); // Flash white
           }
 
-          gl_FragColor = vec4(color * intensity, 0.8);
+          // Output
+          // Alpha 1.0 ensures max visibility with AdditiveBlending
+          gl_FragColor = vec4(color * totalIntensity, 1.0);
         }
       `,
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthTest: false,
+      linewidth: 2, // Hint for thicker lines where supported
     });
     
     neuronMaterialRef.current = neuronShaderMaterial;
@@ -149,11 +164,8 @@ const NeuronScene: React.FC<NeuronSceneProps> = ({ state, simulationParams }) =>
     scene.add(lines);
 
     // --- ION FLUX PARTICLE SYSTEM WITH TRAILS ---
-    // Instead of 1 vertex per particle, we create N vertices per particle to form a trail.
-    // The shader will offset these vertices in time ("ghosting").
-    
-    const particleCount = 1500; 
-    const trailLength = 8; // Number of segments in the trail
+    const PARTICLE_COUNT = 1500; 
+    const TRAIL_LENGTH = 12; 
     
     const ionGeo = new THREE.BufferGeometry();
     const ionPos: number[] = [];
@@ -163,7 +175,7 @@ const NeuronScene: React.FC<NeuronSceneProps> = ({ state, simulationParams }) =>
     const ionTrailIdx: number[] = []; // 0.0 (head) -> 1.0 (tail)
 
     // Sample points along the neuron segments
-    for(let i=0; i<particleCount; i++) {
+    for(let i=0; i<PARTICLE_COUNT; i++) {
         // Pick a random line segment
         const segIndex = Math.floor(Math.random() * (neuronPositions.length / 6));
         const idx = segIndex * 6;
@@ -181,13 +193,13 @@ const NeuronScene: React.FC<NeuronSceneProps> = ({ state, simulationParams }) =>
         const rnd = Math.random();
 
         // Create trail vertices for this single particle
-        for (let j = 0; j < trailLength; j++) {
+        for (let j = 0; j < TRAIL_LENGTH; j++) {
             ionPos.push(pos.x, pos.y, pos.z);
             ionDir.push(dir.x, dir.y, dir.z);
             ionType.push(type);
             ionRandom.push(rnd);
             // Normalized index: 0 is head, 1 is tail
-            ionTrailIdx.push(j / (trailLength - 1));
+            ionTrailIdx.push(j / (TRAIL_LENGTH - 1));
         }
     }
 
@@ -202,99 +214,131 @@ const NeuronScene: React.FC<NeuronSceneProps> = ({ state, simulationParams }) =>
         time: { value: 0 },
         uNa: { value: 0 }, // Sodium conductance/flow
         uK: { value: 0 },  // Potassium conductance/flow
+        pixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
       },
       vertexShader: `
         uniform float time;
         uniform float uNa;
         uniform float uK;
+        uniform float pixelRatio;
         
         attribute float ionType;
         attribute float random;
         attribute vec3 direction;
-        attribute float trailIdx; // 0.0 to 1.0
+        attribute float trailIdx; // 0.0 (head) to 1.0 (tail)
         
         varying vec3 vColor;
         varying float vAlpha;
+        varying float vType;
         
         void main() {
           vec3 pos = position;
+          vType = ionType;
           float activity = 0.0;
-          float sizeScale = 1.0;
           
-          // --- Trail Logic ---
-          // We calculate a 'localTime' for each trail segment.
-          // The tail segments are 'lagging' behind in time.
-          float localTime = time;
-          
+          // --- Na+ (Sodium) Logic ---
           if (ionType < 0.5) {
-            // Sodium (Na+) - Influx / Spiky
             activity = uNa;
             
-            // Short lag for jittery spark effect
-            float lag = trailIdx * 0.05; 
-            localTime = time - lag;
+            // Dynamic Trail: Stretches with activity
+            // Base lag 0.04, expands significantly under load
+            float lagBase = 0.04 + (uNa * 0.08);
+            float lag = trailIdx * lagBase; 
             
-            // Jittery movement
-            float jitter = sin(localTime * 20.0 + random * 100.0) * 0.1;
-            pos += direction * jitter * (1.0 + uNa * 0.1); 
+            float localTime = time - lag;
             
-            vColor = vec3(0.0, 0.95, 1.0); // Cyan
+            // Jitter increases with activity for "electric" look
+            float jitterFreq = 20.0 + (uNa * 30.0);
+            float jitterAmp = 0.1 + (uNa * 0.2);
             
-            // Fade tail alpha
-            vAlpha = smoothstep(0.05, 0.8, activity) * 0.8 * (1.0 - trailIdx); 
+            // High frequency vibration 
+            vec3 jitter = direction * sin(localTime * jitterFreq + random * 100.0) * jitterAmp;
+            pos += jitter;
             
-            sizeScale = 1.0 + uNa * 0.05;
-            float pSize = 4.0 * (1.0 + jitter * 5.0) * sizeScale * (1.0 - trailIdx * 0.5);
+            vColor = vec3(0.1, 1.0, 1.0); // Bright Electric Cyan
+            
+            // Alpha: Head is opaque, tail fades
+            // Smoothstep ensures they only appear when channel is open
+            vAlpha = smoothstep(0.05, 1.0, activity) * (1.0 - pow(trailIdx, 0.7));
+            
+            // Size Modulation
+            float sizeBase = 4.0;
+            float sizeMod = (1.0 + uNa * 2.0); // Grows with flow
+            float sizeTrail = (1.0 - trailIdx * 0.5); // Tapers
             
             vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
             gl_Position = projectionMatrix * mvPosition;
+            gl_PointSize = sizeBase * sizeMod * sizeTrail * (8.0 / -mvPosition.z) * pixelRatio;
             
-            // Perspective Size Attenuation
-            gl_PointSize = pSize * (8.0 / -mvPosition.z);
-            
-          } else {
-            // Potassium (K+) - Efflux / Drifting
+          } 
+          // --- K+ (Potassium) Logic ---
+          else {
             activity = uK;
             
-            // Longer lag for smooth flow trails
-            float lag = trailIdx * 0.2;
-            localTime = time - lag;
+            // Dynamic Trail: Flow speed and trail length
+            float driftBase = 1.0 + (uK * 2.0);
+            float lagBase = 0.2 + (uK * 0.2); // Trails get longer and lazier
             
-            float driftSpeed = 1.5 + uK * 0.01; // Faster drift in overdrive
-            float cycle = mod(localTime * driftSpeed + random * 10.0, 1.0);
+            float lag = trailIdx * lagBase;
+            float localTime = time - lag;
             
-            pos += direction * (cycle * 2.0); // Drift out
+            // Smooth drifting motion
+            float cycle = mod(localTime * driftBase + random * 10.0, 1.0);
             
-            vColor = vec3(0.74, 0.07, 1.0); // Purple
+            // Spiral/Drift effect away from neuron
+            vec3 offset = direction * (cycle * 3.0);
+            // Add slight spiral twist to the trail
+            offset += cross(direction, vec3(0,1,0)) * sin(localTime * 2.0) * 0.2 * trailIdx;
             
-            // Fade Alpha
-            vAlpha = smoothstep(0.05, 0.8, activity) * (1.0 - cycle) * (1.0 - trailIdx); 
+            pos += offset;
             
-            sizeScale = 1.0 + uK * 0.05;
-            float pSize = 6.0 * (1.0 - cycle * 0.5) * sizeScale * (1.0 - trailIdx * 0.3);
+            vColor = vec3(0.8, 0.2, 1.0); // Purple/Magenta
+            
+            // Alpha Fade
+            vAlpha = smoothstep(0.05, 1.0, activity) * (1.0 - cycle) * (1.0 - trailIdx); 
+            
+            float sizeBase = 5.0;
+            float sizeMod = (1.0 + uK * 0.5);
             
             vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
             gl_Position = projectionMatrix * mvPosition;
-            
-            // Perspective Size Attenuation
-            gl_PointSize = pSize * (8.0 / -mvPosition.z);
+            gl_PointSize = sizeBase * sizeMod * (1.0 - trailIdx * 0.4) * (8.0 / -mvPosition.z) * pixelRatio;
           }
         }
       `,
       fragmentShader: `
         varying vec3 vColor;
         varying float vAlpha;
+        varying float vType;
         
         void main() {
           if (vAlpha < 0.01) discard;
           
-          // Soft circular particle
           vec2 coord = gl_PointCoord - vec2(0.5);
           float dist = length(coord);
           if (dist > 0.5) discard;
           
-          float glow = 1.0 - (dist * 2.0);
-          glow = pow(glow, 1.5);
+          // Procedural Texture Generation
+          float glow = 0.0;
+          
+          if (vType < 0.5) { // Na+ : Sharp, electric spark
+             // Sharp core
+             glow = 1.0 - (dist * 2.0);
+             glow = pow(glow, 3.0);
+             
+             // Horizontal flare artifact for "cinematic" look
+             float flare = max(0.0, 1.0 - abs(coord.y * 8.0));
+             glow += flare * 0.6;
+             
+             // Slight vertical flare
+             float vFlare = max(0.0, 1.0 - abs(coord.x * 12.0));
+             glow += vFlare * 0.3;
+             
+          } else { // K+ : Soft, gaseous orb
+             // Soft diffusion
+             glow = 1.0 - (dist * 2.0);
+             glow = pow(glow, 1.5);
+          }
           
           gl_FragColor = vec4(vColor, vAlpha * glow);
         }
@@ -340,6 +384,25 @@ const NeuronScene: React.FC<NeuronSceneProps> = ({ state, simulationParams }) =>
     particlesRef.current = stars;
     scene.add(stars);
 
+
+    // --- Handle Resize ---
+    const handleResize = () => {
+        if (!containerRef.current || !cameraRef.current || !rendererRef.current) return;
+        const width = containerRef.current.clientWidth;
+        const height = containerRef.current.clientHeight;
+        
+        cameraRef.current.aspect = width / height;
+        cameraRef.current.updateProjectionMatrix();
+        rendererRef.current.setSize(width, height);
+        
+        // Update pixel ratio uniform in case of monitor move/zoom
+        if (ionMaterialRef.current) {
+            ionMaterialRef.current.uniforms.pixelRatio.value = Math.min(window.devicePixelRatio, 2);
+        }
+    };
+    window.addEventListener('resize', handleResize);
+    // Force initial resize to ensure canvas has size
+    handleResize();
 
     // --- Animation Loop ---
     let frameId: number;
@@ -421,6 +484,7 @@ const NeuronScene: React.FC<NeuronSceneProps> = ({ state, simulationParams }) =>
 
     // --- Cleanup ---
     return () => {
+      window.removeEventListener('resize', handleResize);
       cancelAnimationFrame(frameId);
       if (containerRef.current && rendererRef.current) {
         containerRef.current.removeChild(rendererRef.current.domElement);
