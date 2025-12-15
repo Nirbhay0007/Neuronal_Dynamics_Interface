@@ -1,0 +1,5 @@
+{
+  "name": "Neural Dynamics",
+  "description": "A cinematic, sci-fi visualization of a Hodgkin-Huxley neuron simulation featuring real-time bioelectric computation.",
+  "requestFramePermissions": []
+}
